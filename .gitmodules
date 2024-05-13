@@ -1,0 +1,6 @@
+[submodule "segment-anything"]
+	path = segment-anything
+	url = git@github.com:facebookresearch/segment-anything.git
+[submodule "Semantic-Segment-Anything"]
+	path = Semantic-Segment-Anything
+	url = git@github.com:fudan-zvg/Semantic-Segment-Anything.git
