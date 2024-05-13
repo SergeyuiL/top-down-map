@@ -43,7 +43,11 @@ data
 
 ```shell
 python scripts/mapping_utils.py --data_dir <path to data> --map_save_dir <path to save maps>
-
 # e.g., python scripts/mapping_utils.py --data_dir data/ --map_save_dir maps/locobot
+
+# show color map
+# python scripts/show_color_map.py --map_save_dir maps/locobot
 ```
+
+
 
