@@ -11,6 +11,10 @@ cd segment-anything; pip install -e .; cd ..
 
 # 2 Data preparation
 
+Feel free to download my rosbag:[indoor rosbag](https://drive.google.com/file/d/1t72MNzk0BFzAl7X1dX_5jvwkef4IPqyT/view?usp=sharing)
+
+Preprocess:[rosbag play](https://github.com/SergeyuiL/rosbag_play.git)
+
 Save the data in advance to the data folder in the following format：
 
 ```shell
