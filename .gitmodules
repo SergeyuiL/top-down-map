@@ -4,3 +4,6 @@
 [submodule "Semantic-Segment-Anything"]
 	path = Semantic-Segment-Anything
 	url = git@github.com:fudan-zvg/Semantic-Segment-Anything.git
+[submodule "vlmaps"]
+	path = vlmaps
+	url = git@github.com:vlmaps/vlmaps.git
