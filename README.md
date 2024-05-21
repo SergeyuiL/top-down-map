@@ -48,27 +48,24 @@ data
     ├── ...
 ```
 
-# 3 create top-down color map
+# 3 segment and filter expected semantic classes
+
+```shell
+python Semantic-Segment-Anything/scripts/main_ssa_engine.py --data_dir=<The name of your dataset> --out_dir=output --world_size=1 --save_img --sam --ckpt_path=ckp/sam_vit_h_4b8939.pth --light_mode
+# e.g. python Semantic-Segment-Anything/scripts/main_ssa_engine.py --data_dir=data/color --out_dir=data/semantic --world_size=1 --save_img --sam --ckpt_path=ckp/sam_vit_h_4b8939.pth --light_mode
+
+python scripts/seg_my_classes.py --data_dir=<path to data> 
+# e.g. python scripts/seg_my_classes.py --data_dir=data/ 
+```
+
+# 4 create top-down color and seg map
 
 ```shell
 python scripts/mapping_utils.py --data_dir=<path to data> --map_save_dir=<path to save maps>
 # e.g., python scripts/mapping_utils.py --data_dir=data/ --map_save_dir=maps/locobot
 
 # show color map
-# python scripts/show_color_map.py --map_save_dir maps/locobot
+# python scripts/show_map.py --map_save_dir=maps/locobot
 ```
-
-# 4 segment
-```shell
-python Semantic-Segment-Anything/scripts/main_ssa_engine.py --data_dir=<The name of your dataset> --out_dir=output --world_size=1 --save_img --sam --ckpt_path=ckp/sam_vit_h_4b8939.pth --light_mode
-# e.g. python Semantic-Segment-Anything/scripts/main_ssa_engine.py --data_dir=data/color --out_dir=data/semantic --world_size=1 --save_img --sam --ckpt_path=ckp/sam_vit_h_4b8939.pth --light_mode
-```
-
-# 5 filter classes
-```shell
-python scripts/seg_my_classes.py --data_dir=<path to data> --map_save_dir=<path to save maps>
-# e.g. python scripts/seg_my_classes.py --data_dir=data/ --map_save_dir=maps/locobot
-```
-
 
 

@@ -113,6 +113,7 @@ if __name__=="__main__":
     rgb_dir = os.path.join(data_dir, "color")
     depth_dir = os.path.join(data_dir, "depth")
     pose_dir = os.path.join(data_dir, "pose")
+    seg_dir = os.path.join(data_dir, "semantic_proc")
     color_indices = get_indices(rgb_dir)
     depth_indices = get_indices(depth_dir)
     pose_indices = get_indices(pose_dir)
@@ -123,35 +124,34 @@ if __name__=="__main__":
     rgb_list = [os.path.join(rgb_dir, f"{index}.png") for index in list_index]
     depth_list = [os.path.join(depth_dir, f"{index}.png") for index in list_index]
     pose_list = [os.path.join(pose_dir, f"{index}.txt") for index in list_index]
+    seg_list = [os.path.join(seg_dir, f"{index}.png") for index in list_index]
 
     os.makedirs(map_save_dir, exist_ok=True)
     color_top_down_save_path = os.path.join(map_save_dir, "color_top_down.npy")
-    
+    seg_top_down_save_path = os.path.join(map_save_dir, "seg_top_down.npy")
     
     # initialize a grid with zero position at the center
     color_top_down_height = (camera_height + 1) * np.ones((gs, gs), dtype=np.float32)
+    seg_top_down_height = color_top_down_height
     color_top_down = np.zeros((gs, gs, 3), dtype=np.uint8)
-    gt = np.zeros((gs, gs), dtype=np.int32)
-    obstacles = np.ones((gs, gs), dtype=np.uint8)
-    weight = np.zeros((gs, gs), dtype=float)
+    seg_top_down = np.zeros((gs, gs, 3), dtype=np.uint8)
 
     save_map(color_top_down_save_path, color_top_down)
+    save_map(seg_top_down_save_path, seg_top_down)
 
     tf_list = []
-    data_iter = zip(rgb_list, depth_list, pose_list)
+    data_iter = zip(rgb_list, depth_list, pose_list, seg_list)
     pbar = tqdm(total=len(rgb_list))
     
     # load all images and depths and poses
     for data_sample in data_iter:
-        rgb_path, depth_path, pose_path = data_sample
-
+        rgb_path, depth_path, pose_path, seg_path = data_sample
         try:   
             bgr = cv2.imread(rgb_path)
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         except Exception as e:
             print(f"Failed to load image at {rgb_path}, {e}")
             continue  # Skip this iteration
-
         # read pose
         try:
             pose = np.loadtxt(pose_path)
@@ -162,17 +162,22 @@ if __name__=="__main__":
         if np.linalg.det(pose) == 0.:
             print(f"Singular matrix {pose_path}")
             continue
-
         tf_list.append(pose)
         if len(tf_list) == 1:
             init_tf_inv = np.linalg.inv(tf_list[0])
         tf = init_tf_inv @ pose
-
         # read depth
         try:   
             depth = load_depth(depth_path)
         except Exception as e:
             print(f"Failed to load depth at {depth_path}, {e}")
+            continue  # Skip this iteration
+        # read seg 
+        try:   
+            seg_bgr = cv2.imread(seg_path)
+            seg_rgb = cv2.cvtColor(seg_bgr, cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            print(f"Failed to load segmented image at {seg_path}, {e}")
             continue  # Skip this iteration
         
         # project all point cloud onto the ground
@@ -187,20 +192,23 @@ if __name__=="__main__":
 
         for i, (p, p_local) in enumerate(zip(pc_global.T, pc.T)):
             x, y = pos2grid_id(gs, cs, p[0], p[2])
-            if x >= obstacles.shape[0] or y >= obstacles.shape[1] or x < 0 or y < 0 or p_local[1] < -0.5:
-                continue
 
             rgb_px, rgb_py, rgb_pz = project_point(cam_mat, p_local)
             rgb_v = rgb[rgb_py, rgb_px, :]
+            seg_v = seg_rgb[rgb_py, rgb_px, :]
 
             if p_local[1] < color_top_down_height[y, x]:
                 color_top_down[y, x] = rgb_v
                 color_top_down_height[y, x] = p_local[1]
+            
+            if np.any(seg_v > 0) and p_local[1] < seg_top_down_height[y, x]:
+                seg_top_down[y, x] = seg_v
+                seg_top_down_height[y, x] = p_local[1]
 
             if p_local[1] > camera_height:
                 continue
-            obstacles[y, x] = 0
 
         pbar.update(1)
 
     save_map(color_top_down_save_path, color_top_down)
+    save_map(seg_top_down_save_path, seg_top_down)

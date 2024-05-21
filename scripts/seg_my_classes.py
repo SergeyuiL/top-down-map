@@ -27,7 +27,7 @@ if __name__=="__main__":
     print(f"loading scene {data_dir}")
 
     class_colors = {}
-    files = os.listdir(json_dir)
+    files = [file for file in os.listdir(json_dir) if file.endswith('.json')]
     files_sorted = sorted(files, key=numerical_sort)
     for filename in tqdm(files_sorted, desc="Processing images"):
         if filename.endswith(".json"):
