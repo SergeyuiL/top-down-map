@@ -1,10 +1,15 @@
 # 1 Installation
 
 ```shell
-git clone -recursive git@github.com:SergeyuiL/top-down-map.git
+git clone --recursive git@github.com:SergeyuiL/top-down-map.git
+cd top-down-map/
 conda env create -f environment.yaml
 conda activate tdmap
 python -m spacy download en_core_web_sm
+
+mkdir ckp && cd ckp
+wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
+cd ..
 
 cd segment-anything; pip install -e .; cd ..
 ```
@@ -46,11 +51,23 @@ data
 # 3 create top-down color map
 
 ```shell
-python scripts/mapping_utils.py --data_dir <path to data> --map_save_dir <path to save maps>
-# e.g., python scripts/mapping_utils.py --data_dir data/ --map_save_dir maps/locobot
+python scripts/mapping_utils.py --data_dir=<path to data> --map_save_dir=<path to save maps>
+# e.g., python scripts/mapping_utils.py --data_dir=data/ --map_save_dir=maps/locobot
 
 # show color map
 # python scripts/show_color_map.py --map_save_dir maps/locobot
+```
+
+# 4 segment
+```shell
+python Semantic-Segment-Anything/scripts/main_ssa_engine.py --data_dir=<The name of your dataset> --out_dir=output --world_size=1 --save_img --sam --ckpt_path=ckp/sam_vit_h_4b8939.pth --light_mode
+# e.g. python Semantic-Segment-Anything/scripts/main_ssa_engine.py --data_dir=data/color --out_dir=data/semantic --world_size=1 --save_img --sam --ckpt_path=ckp/sam_vit_h_4b8939.pth --light_mode
+```
+
+# 5 filter classes
+```shell
+python scripts/seg_my_classes.py --data_dir=<path to data> --map_save_dir=<path to save maps>
+# e.g. python scripts/seg_my_classes.py --data_dir=data/ --map_save_dir=maps/locobot
 ```
 
 

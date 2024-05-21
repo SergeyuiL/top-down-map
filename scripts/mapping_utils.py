@@ -96,7 +96,7 @@ if __name__=="__main__":
     depth_sample_rate = 100
     camera_height = 0.52725
     cs = 0.01
-    gs = 1200
+    gs = 1500
     depth_thresh = 3.0
     
     parser = argparse.ArgumentParser(description="Process data and save top down color map")
@@ -126,6 +126,7 @@ if __name__=="__main__":
 
     os.makedirs(map_save_dir, exist_ok=True)
     color_top_down_save_path = os.path.join(map_save_dir, "color_top_down.npy")
+    
     
     # initialize a grid with zero position at the center
     color_top_down_height = (camera_height + 1) * np.ones((gs, gs), dtype=np.float32)
