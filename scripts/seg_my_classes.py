@@ -13,8 +13,9 @@ def numerical_sort(file):
     return int(numbers[0]) if numbers else 0
 
 if __name__=="__main__":
-    expected_classes = ["wall", "floor", "box", "curtain", "pillow", "bed", "cabinet", "bowl", "cup", "shelf", "box"]
-    
+    # expected_classes = ["wall", "floor", "box", "curtain", "pillow", "bed", "cabinet", "bowl", "cup", "shelf", "box"]
+    expected_classes = ["wall", "floor", "shelf", "bench", "chair", "door", "table", "computer", "cabinet", "sofa"]
+              
     parser = argparse.ArgumentParser(description="Filter chosen classes and build top down seg map")
     parser.add_argument('--data_dir', type=str, required=True, help='Directory to the raw data.')
     args = parser.parse_args()
@@ -32,8 +33,8 @@ if __name__=="__main__":
     for filename in tqdm(files_sorted, desc="Processing images"):
         if filename.endswith(".json"):
             json_path = os.path.join(json_dir, filename)
-            idx = filename.split('_')[0]
-            rgb_path = os.path.join(rgb_dir, f"{idx}.png")
+            idx = filename.split('_')[1]
+            rgb_path = os.path.join(rgb_dir, f"rgb_{idx}.png")
             # read seg json
             with open(json_path, 'r') as file:
                 seg_data = json.load(file)
