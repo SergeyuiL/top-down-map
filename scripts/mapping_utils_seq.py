@@ -130,7 +130,7 @@ if __name__=="__main__":
     seg_dir = os.path.join(data_dir, "semantic_proc")
     
     pose_path = os.path.join(data_dir, "node_pose.txt")
-    base_poses = data = np.genfromtxt(pose_path, delimiter=' ')[:, 1:]
+    base_poses = np.genfromtxt(pose_path, delimiter=' ')[:, 1:]
     
     indices = np.arange(base_poses.shape[0])
     pose_list = []
