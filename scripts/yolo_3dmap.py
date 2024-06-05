@@ -2,22 +2,24 @@ import os
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import json
+from tqdm import tqdm
 import cv2 
 
 from ultralytics import YOLO
+from ultralytics import settings
 
 class mapbuilder:
-    def __init__(self, depth_dir, rgb_dir, pose_path, camera_info_path, trans_camera2base, quat_camera2base):
+    def __init__(self, depth_dir, rgb_dir, pose_path, camera_info_path, trans_camera_base, quat_camera_base):
         self.depth_dir = depth_dir
         self.rgb_dir = rgb_dir
         self.pose_path = pose_path
         self.camera_info_path = camera_info_path
         
-        r = R.from_quat(quat_camera2base)
+        r = R.from_quat(quat_camera_base)
         rot_matrix_camera2base = r.as_matrix()
         self.T_base_camera = np.eye(4)
         self.T_base_camera[:3, :3] = rot_matrix_camera2base
-        self.T_base_camera[:3, 3] = trans_camera2base
+        self.T_base_camera[:3, 3] = trans_camera_base
 
         self.camera_intrinsics = np.zeros((1, 4))
         self.camera_matrix = np.eye(3)
@@ -60,15 +62,27 @@ class mapbuilder:
                                 [0,  0,  1]
                             ])
         
-    def seg_rgb(self, image):
-        results = self.model.predict(source=image, save=True, save_txt=True)
+    def seg_rgb(self):
+        # settings.update({"runs_dir": runs_dir})
+        self.model.predict(source=self.rgb_list, save=True, save_txt=True)
+        # for rgb_path in rgb_list:
+        #     rgb_img = cv2.imread(rgb_path)
+        #     self.model.predict(source=rgb_img, save=True, save_txt=True)
         
 if __name__ == "__main__":
     data_dir = "/home/sg/workspace/top-down-map/mapsave"
+    segment_dir = "/home/sg/workspace/top-down-map/runs/segment"
     rgb_dir = os.path.join(data_dir, "rgb")
     depth_dir = os.path.join(data_dir, "depth")
     pose_path = os.path.join(data_dir, "node_pose.txt")
-    ssmap = mapbuilder()
+    camera_info_path = os.path.join(data_dir, "camera_info.json")
+    
+    trans_camera_base = [0.08278859935292791, -0.03032243564439939, 1.0932014910932797]
+    quat_camera_base = [-0.48836894018639176, 0.48413701319615116, -0.5135400532533373, 0.5132092598729002]
+    
+    ssmap = mapbuilder(depth_dir, rgb_dir, pose_path, camera_info_path,trans_camera_base, quat_camera_base)
+    ssmap.data_load()
+    ssmap.seg_rgb()
     
         
         

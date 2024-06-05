@@ -1,3 +1,5 @@
-data/
 ckp/sam_vit_h_4b8939.pth
 maps/
+*.png
+*.txt
+yolov8x-seg.pt
