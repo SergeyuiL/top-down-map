@@ -1,6 +1,5 @@
 {
     "header": {
-        "seq": null,
         "stamp": "1717036947.434838379",
         "frame_id": "realsense1_color_optical_frame"
     },

@@ -3,7 +3,7 @@ import json
 import numpy as np
 
 # 读取 object_info.json 文件
-object_info_path = "/home/sg/workspace/top-down-map/mapsave/object_info.json"
+object_info_path = "/home/sg/workspace/top-down-map/data_rosbag/object_info.json"
 with open(object_info_path, 'r') as f:
     object_info = json.load(f)
 

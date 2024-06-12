@@ -26,6 +26,13 @@ def clear_directory(directory_path):
                 shutil.rmtree(file_path)  
         except Exception as e:
             print(f"Failed to delete {file_path}. Reason: {e}")
+            
+def depth_denoise(depth_path, kernel_size=9):
+    orin_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    opened_image = cv2.morphologyEx(orin_image, cv2.MORPH_OPEN, kernel)
+    denoised_image = cv2.morphologyEx(opened_image, cv2.MORPH_CLOSE, kernel)
+    return denoised_image
 
 class mapbuilder:
     def __init__(self, data_dir, trans_camera_base, quat_camera_base):
@@ -89,6 +96,9 @@ class mapbuilder:
                                 [0,  fy, cy],
                                 [0,  0,  1]
                             ])
+        
+    
+        
         
     def seg_rgb(self, confidence):
         clear_directory(self.seg_dir)
@@ -157,43 +167,6 @@ class mapbuilder:
         pbar.close()
         o3d.io.write_point_cloud(self.rgb_pointcloud_save_path, combined_point_cloud)
     
-    # TODO: filter the floor and celing point and depth out the max_depth in realsense
-    # def filter_pointcloud(self, pointcloud, z_min=-np.inf, z_max=np.inf):
-    #     mask = (pointcloud[:, 2] > z_min) & (pointcloud[:, 2] < z_max)
-    #     return pointcloud[mask]
-        
-    # def build_pointcloud(self, voxel_size=0.05, z_min=-np.inf, z_max=np.inf):
-    #     combined_point_cloud = o3d.geometry.PointCloud()
-    #     pbar = tqdm(total=len(self.rgb_list))
-    #     for rgb_path, depth_path, pose in zip(self.rgb_list, self.depth_list, self.pose_list):
-    #         try:
-    #             rgb_image = cv2.imread(rgb_path)
-    #             depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
-    #         except Exception as e:
-    #             print("Failed to load source data")
-    #             print("Error:", e)
-    #             continue  
-    #         try:
-    #             point_cloud = self.depth_to_pointcloud(depth_image)
-    #             transformed_point_cloud = self.transform_pointcloud(point_cloud, pose)
-    #             filtered_point_cloud = self.filter_pointcloud(transformed_point_cloud, z_min, z_max)
-    #             colors = rgb_image.reshape(-1, 3) / 255.0  
-    #             colors = colors[filtered_point_cloud[:, 2] > z_min]  
-
-    #             single_point_cloud = o3d.geometry.PointCloud()
-    #             single_point_cloud.points = o3d.utility.Vector3dVector(filtered_point_cloud)
-    #             single_point_cloud.colors = o3d.utility.Vector3dVector(colors)
-                
-    #             single_point_cloud = single_point_cloud.voxel_down_sample(voxel_size=voxel_size)
-    #             combined_point_cloud += single_point_cloud
-    #         except Exception as e:
-    #             print("Failed to transform and append pointcloud")
-    #             print("Error:", e)
-    #             continue  
-    #         pbar.update(1)
-
-    #     o3d.io.write_point_cloud(self.rgb_pointcloud_save_path, combined_point_cloud)
-        
     # TODO:can't show in wsl2 for openGL config, waiting for checking
     def visualize_ply(self, before_seg):
         if before_seg:
@@ -208,9 +181,7 @@ class mapbuilder:
         vis.destroy_window()
         
     # TODO: build pointcloud of fusion semantic segmentation
-    def build_ss_pointcloud(self, max_depth=6000, DBSCAN_eps=0.05, DBSCAN_min_samples=50):
-        # eps (ε, epsilon)：定义了数据点之间的最大距离，如果两个点的距离小于等于 eps，则这两个点是密度可达的。eps 越大，越多的点会被包括在一个簇内，从而减少簇的数量。
-        # min_samples：定义了构成一个簇的最小数据点数。如果一个点的邻域内至少有 min_samples 个点（包括点本身），则这个点是一个核心点。min_samples 越大，簇的数量会减少，并且更多的点会被视为噪声。
+    def build_ss_pointcloud(self, max_depth=6000, DBSCAN_eps=0.05, DBSCAN_min_samples=50, batch_size=100000):
         combined_point_cloud = o3d.geometry.PointCloud()
 
         pbar = tqdm(total=len(self.rgb_list))
@@ -272,71 +243,69 @@ class mapbuilder:
             pbar.update(1)
         pbar.close()
 
-        print("Start to cluster and label pointcloud")
-
         all_transformed_points = np.vstack(all_transformed_points)
         all_colors = np.vstack(all_colors)
-        start_time = time.time()
-        db = DBSCAN(eps=DBSCAN_eps, min_samples=DBSCAN_min_samples).fit(all_transformed_points)
-        end_time = time.time()
-        print(f"Time consumption for clustering: {end_time - start_time}")
-        labels = db.labels_
+        num_points = all_transformed_points.shape[0]
 
-        unique_labels = np.unique(labels)
+        print("Start to cluster and label pointcloud")
+        print(f"Total points: {num_points}")
 
         final_object_info = []
         filtered_point_cloud = o3d.geometry.PointCloud()
         start_time = time.time()
-        pbar = tqdm(total=len(unique_labels))
-        for label in unique_labels:
-            if label == -1:
-                continue
-            mask = (labels == label)
-            cluster_points = all_transformed_points[mask]
-            cluster_colors = all_colors[mask]
-            class_name = max(set([all_class_names[i] for i in range(len(all_class_names)) if mask[i]]), key=[all_class_names[i] for i in range(len(all_class_names)) if mask[i]].count)
 
-            cluster_2d_points = cluster_points[:, [0, 1]]  # 投影到 xy 平面
-            hull = cv2.convexHull(cluster_2d_points.astype(np.float32))
+        for start in range(0, num_points, batch_size):
+            end = min(start + batch_size, num_points)
+            batch_points = all_transformed_points[start:end]
+            batch_colors = all_colors[start:end]
+            batch_class_names = all_class_names[start:end]
+            
+            db = DBSCAN(eps=DBSCAN_eps, min_samples=DBSCAN_min_samples).fit(batch_points)
+            labels = db.labels_
 
-            obj_info = {
-                "class_name": class_name,
-                "contour": hull[:, 0, :].tolist()  # 提取轮廓点
-            }
-            final_object_info.append(obj_info)
+            unique_labels = np.unique(labels)
+            for label in unique_labels:
+                if label == -1:
+                    continue
+                mask = (labels == label)
+                cluster_points = batch_points[mask]
+                cluster_colors = batch_colors[mask]
+                class_name = max(set([batch_class_names[i] for i in range(len(batch_class_names)) if mask[i]]), key=[batch_class_names[i] for i in range(len(batch_class_names)) if mask[i]].count)
 
-            single_point_cloud = o3d.geometry.PointCloud()
-            single_point_cloud.points = o3d.utility.Vector3dVector(cluster_points)
-            single_point_cloud.colors = o3d.utility.Vector3dVector(cluster_colors)
-            filtered_point_cloud += single_point_cloud
-            pbar.update(1)
-        pbar.close()
+                cluster_2d_points = cluster_points[:, [0, 1]]  # 投影到 xy 平面
+                hull = cv2.convexHull(cluster_2d_points.astype(np.float32))
+
+                obj_info = {
+                    "class_name": class_name,
+                    "contour": hull[:, 0, :].tolist()  # 提取轮廓点
+                }
+                final_object_info.append(obj_info)
+
+                single_point_cloud = o3d.geometry.PointCloud()
+                single_point_cloud.points = o3d.utility.Vector3dVector(cluster_points)
+                single_point_cloud.colors = o3d.utility.Vector3dVector(cluster_colors)
+                filtered_point_cloud += single_point_cloud
+
         end_time = time.time()
-        print(f"Time consumption for labeling: {end_time - start_time}")
+        print(f"Time consumption for clustering and labeling: {end_time - start_time}")
 
         o3d.io.write_point_cloud(self.seg_pointcloud_save_path, filtered_point_cloud)
-
         with open(os.path.join(os.path.dirname(self.seg_pointcloud_save_path), 'object_info.json'), 'w') as f:
             json.dump(final_object_info, f, indent=4)
             
 if __name__ == "__main__":
-    data_dir = "/home/sg/workspace/top-down-map/mapsave"
+    data_dir = "/home/sg/workspace/top-down-map/data_rosbag"
     
-    trans_camera_base = [0.08278859935292791, -0.03032243564439939, 1.0932014910932797]
-    quat_camera_base = [-0.48836894018639176, 0.48413701319615116, -0.5135400532533373, 0.5132092598729002]
+    # trans_camera_base = [0.08278859935292791, -0.03032243564439939, 1.0932014910932797]
+    # quat_camera_base = [-0.48836894018639176, 0.48413701319615116, -0.5135400532533373, 0.5132092598729002]
     
-    ssmap = mapbuilder(data_dir, trans_camera_base, quat_camera_base)
+    trans_camera_footprint = [0.08278859935292791, -0.03032243564439939, 1.3482014910932798]
+    quat_camera_footprint = [-0.48836894018639176, 0.48413701319615116, -0.5135400532533373, 0.5132092598729002]
+    
+    # ssmap = mapbuilder(data_dir, trans_camera_base, quat_camera_base)
+    ssmap = mapbuilder(data_dir, trans_camera_footprint, quat_camera_footprint)
     ssmap.data_load()
-    # ssmap.seg_rgb(confidence=0.6)
+    ssmap.seg_rgb(confidence=0.6)
     # ssmap.build_pointcloud(voxel_size=0.8, z_min=0.1, z_max=2)
     # ssmap.visualize_ply(before_seg=True)
-    ssmap.build_ss_pointcloud(max_depth=5000, DBSCAN_eps=0.05, DBSCAN_min_samples=100)
-    
-    
-        
-        
-        
-            
-            
-            
-        
+    ssmap.build_ss_pointcloud(max_depth=5000, DBSCAN_eps=0.05, DBSCAN_min_samples=50, batch_size=100000)
