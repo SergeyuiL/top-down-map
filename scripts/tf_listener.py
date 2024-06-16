@@ -15,7 +15,8 @@ class TfListener(Node):
     def on_timer(self):
         try:
             now = rclpy.time.Time()
-            trans = self.tf_buffer.lookup_transform('base_footprint', 'realsense1_color_optical_frame', now)
+            # trans = self.tf_buffer.lookup_transform('base_footprint', 'realsense1_color_optical_frame', now)
+            trans = self.tf_buffer.lookup_transform('base_link', 'realsense1_color_optical_frame', now)
             self.get_logger().info(f"Transform: {trans.transform.translation.x}, {trans.transform.translation.y}, {trans.transform.translation.z}")
             self.get_logger().info(f"Rotation: {trans.transform.rotation.x}, {trans.transform.rotation.y}, {trans.transform.rotation.z}, {trans.transform.rotation.w}")
         except (LookupException, ConnectivityException, ExtrapolationException):

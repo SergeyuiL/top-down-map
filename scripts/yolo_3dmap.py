@@ -27,7 +27,7 @@ def clear_directory(directory_path):
         except Exception as e:
             print(f"Failed to delete {file_path}. Reason: {e}")
             
-def depth_denoise(depth_path, kernel_size=9):
+def depth_denoise(depth_path, kernel_size=11):
     orin_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
     kernel = np.ones((kernel_size, kernel_size), np.uint8)
     opened_image = cv2.morphologyEx(orin_image, cv2.MORPH_OPEN, kernel)
@@ -96,9 +96,6 @@ class mapbuilder:
                                 [0,  fy, cy],
                                 [0,  0,  1]
                             ])
-        
-    
-        
         
     def seg_rgb(self, confidence):
         clear_directory(self.seg_dir)
@@ -197,7 +194,8 @@ class mapbuilder:
                 continue
 
             try:
-                depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+                # depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+                depth_image = depth_denoise(depth_path)
                 seg_image = cv2.imread(os.path.join(seg_dir, "rgb.jpg"))
             except Exception as e:
                 print(f"Failed to load source data: {e}")
@@ -294,18 +292,17 @@ class mapbuilder:
             json.dump(final_object_info, f, indent=4)
             
 if __name__ == "__main__":
-    data_dir = "/home/sg/workspace/top-down-map/data_rosbag"
+    data_dir = "/home/sg/workspace/top-down-map/map06132"
     
-    # trans_camera_base = [0.08278859935292791, -0.03032243564439939, 1.0932014910932797]
-    # quat_camera_base = [-0.48836894018639176, 0.48413701319615116, -0.5135400532533373, 0.5132092598729002]
+    trans_camera_base = [0.08278859935292791, -0.03032243564439939, 1.0932014910932797]
+    quat_camera_base = [-0.48836894018639176, 0.48413701319615116, -0.5135400532533373, 0.5132092598729002]
+    # trans_camera_footprint = [0.08278859935292791, -0.03032243564439939, 1.3482014910932798]
+    # quat_camera_footprint = [-0.48836894018639176, 0.48413701319615116, -0.5135400532533373, 0.5132092598729002]
     
-    trans_camera_footprint = [0.08278859935292791, -0.03032243564439939, 1.3482014910932798]
-    quat_camera_footprint = [-0.48836894018639176, 0.48413701319615116, -0.5135400532533373, 0.5132092598729002]
-    
-    # ssmap = mapbuilder(data_dir, trans_camera_base, quat_camera_base)
-    ssmap = mapbuilder(data_dir, trans_camera_footprint, quat_camera_footprint)
+    ssmap = mapbuilder(data_dir, trans_camera_base, quat_camera_base)
+    # ssmap = mapbuilder(data_dir, trans_camera_footprint, quat_camera_footprint)
     ssmap.data_load()
-    ssmap.seg_rgb(confidence=0.6)
+    # ssmap.seg_rgb(confidence=0.6)
     # ssmap.build_pointcloud(voxel_size=0.8, z_min=0.1, z_max=2)
     # ssmap.visualize_ply(before_seg=True)
     ssmap.build_ss_pointcloud(max_depth=5000, DBSCAN_eps=0.05, DBSCAN_min_samples=50, batch_size=100000)

@@ -10,3 +10,5 @@ model = YOLO("yolov8x-seg.pt")
 # results = model.predict(source=image, save=True)
 class_names = model.names
 print(class_names)
+class_colors = model.colors
+print(class_colors)
