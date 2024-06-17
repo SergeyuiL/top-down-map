@@ -8,6 +8,7 @@ import cv2
 import open3d as o3d
 import time
 from sklearn.cluster import DBSCAN
+from scipy.spatial import ConvexHull
 
 from ultralytics import YOLO
 from ultralytics import settings
@@ -34,6 +35,25 @@ def depth_denoise(depth_path, kernel_size=11):
     denoised_image = cv2.morphologyEx(opened_image, cv2.MORPH_CLOSE, kernel)
     return denoised_image
 
+def fill_contours(contours, shape):
+    img = np.zeros(shape, dtype=np.uint8)
+    for contour in contours:
+        contour_int = np.array(contour, dtype=np.int32)
+        cv2.fillPoly(img, [contour_int], 1)
+    return np.argwhere(img > 0)
+
+def compute_center(contour):
+    contour_np = np.array(contour)
+    center_x = np.mean(contour_np[:, 0])
+    center_y = np.mean(contour_np[:, 1])
+    return [center_x, center_y]
+
+def merge_contours(contours):
+    all_points = np.vstack(contours)
+    hull = ConvexHull(all_points)
+    merged_contour = all_points[hull.vertices].tolist()
+    return merged_contour
+
 class mapbuilder:
     def __init__(self, data_dir, trans_camera_base, quat_camera_base):
         self.depth_dir = os.path.join(data_dir, "depth")
@@ -44,6 +64,8 @@ class mapbuilder:
         
         self.rgb_pointcloud_save_path = os.path.join(data_dir, "rgb_pointcloud.ply")
         self.seg_pointcloud_save_path = os.path.join(data_dir, "seg_pointcloud.ply")
+        self.object_info_path = os.path.join(data_dir, "object_info.json")
+        self.merged_object_info_path = os.path.join(data_dir, "merged_object_info.json")
         
         r = R.from_quat(quat_camera_base)
         rot_matrix_camera2base = r.as_matrix()
@@ -177,7 +199,6 @@ class mapbuilder:
         vis.run()
         vis.destroy_window()
         
-    # TODO: build pointcloud of fusion semantic segmentation
     def build_ss_pointcloud(self, max_depth=6000, DBSCAN_eps=0.05, DBSCAN_min_samples=50, batch_size=100000):
         combined_point_cloud = o3d.geometry.PointCloud()
 
@@ -288,8 +309,50 @@ class mapbuilder:
         print(f"Time consumption for clustering and labeling: {end_time - start_time}")
 
         o3d.io.write_point_cloud(self.seg_pointcloud_save_path, filtered_point_cloud)
-        with open(os.path.join(os.path.dirname(self.seg_pointcloud_save_path), 'object_info.json'), 'w') as f:
+        with open(self.object_info_path, 'w') as f:
             json.dump(final_object_info, f, indent=4)
+            
+    def merge_object_info(self, eps=0.5, min_samples=2):
+        try:
+            with open(self.object_info_path, 'r') as f:
+                object_info =  json.load(f)
+        except Exception as e:
+            print(f"Failed to build 3D semantic segment map: {e}")
+            
+        print("Start 2D clustering")
+        start_time = time.time()
+        class_contours = {}
+        for obj in object_info:
+            class_name = obj['class_name']
+            contour = obj['contour']
+            if class_name not in class_contours:
+                class_contours[class_name] = []
+            class_contours[class_name].append(contour)
+        
+        merged_objects = []
+        for class_name, contours in class_contours.items():
+            points = np.vstack(contours)
+            clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(points)
+            labels = clustering.labels_
+            
+            unique_labels = set(labels)
+            for label in unique_labels:
+                if label == -1:
+                    continue  # 忽略噪声点
+                cluster_contours = [contours[i] for i in range(len(contours)) if labels[i] == label]
+                if cluster_contours:  # 确保有轮廓可以合并
+                    merged_contour = merge_contours(cluster_contours)
+                    if merged_contour:  # 检查合并后的轮廓是否有效
+                        center = compute_center(merged_contour)
+                        merged_objects.append({
+                            'class_name': class_name,
+                            'center': center,
+                            'contour': merged_contour
+                        })
+        end_time = time.time()
+        with open(self.merged_object_info_path, 'w') as f:
+            json.dump(merged_objects, f, indent=4)
+        print(f"Merged object info saved to {self.merged_object_info_path}, time consumption: {end_time - start_time}")
             
 if __name__ == "__main__":
     data_dir = "/home/sg/workspace/top-down-map/map06132"
@@ -305,4 +368,5 @@ if __name__ == "__main__":
     # ssmap.seg_rgb(confidence=0.6)
     # ssmap.build_pointcloud(voxel_size=0.8, z_min=0.1, z_max=2)
     # ssmap.visualize_ply(before_seg=True)
-    ssmap.build_ss_pointcloud(max_depth=5000, DBSCAN_eps=0.05, DBSCAN_min_samples=50, batch_size=100000)
+    ssmap.build_ss_pointcloud(max_depth=5000, DBSCAN_eps=0.1, DBSCAN_min_samples=200, batch_size=100000)
+    # ssmap.merge_object_info(eps=0.005, min_samples=2)
