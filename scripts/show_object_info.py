@@ -1,63 +1,45 @@
-import matplotlib.pyplot as plt
 import json
+import matplotlib.pyplot as plt
+import open3d as o3d
 import numpy as np
 
-# 读取 object_info.json 文件
-object_info_path = "/home/sg/workspace/top-down-map/map06132/object_info.json"
-with open(object_info_path, 'r') as f:
-    object_info = json.load(f)
-
-# 创建一个新的绘图窗口
-plt.figure(figsize=(10, 10))
-
-# 绘制每个对象的轮廓并标注类别
-for obj in object_info:
-    class_name = obj['class_name']
-    contour = obj['contour']
-    contour = np.array(contour)
+def visualize_3d_pointcloud_with_contours(pointcloud_path, json_path):
+    # 读取点云文件
+    point_cloud = o3d.io.read_point_cloud(pointcloud_path)
     
-    # 绘制轮廓
-    plt.plot(contour[:, 0], contour[:, 1], label=class_name)
+    # 创建一个Open3D可视化器
+    vis = o3d.visualization.Visualizer()
+    vis.create_window()
+    vis.add_geometry(point_cloud)
     
-    # 标注类别
-    centroid = np.mean(contour, axis=0)
-    plt.text(centroid[0], centroid[1], class_name, fontsize=12, ha='center')
+    # 读取并绘制2D轮廓
+    with open(json_path, 'r') as f:
+        object_info = json.load(f)
 
-# 设置绘图参数
-plt.xlabel('X-axis')
-plt.ylabel('Y-axis')
-plt.title('2D Contours with Class Labels')
-plt.legend()
-plt.grid(True)
-plt.axis('equal')  # 保持x和y轴比例一致
-
-object_info_path = "/home/sg/workspace/top-down-map/map06132/merged_object_info.json"
-with open(object_info_path, 'r') as f:
-    object_info = json.load(f)
-
-# 创建一个新的绘图窗口
-plt.figure(figsize=(10, 10))
-
-# 绘制每个对象的轮廓并标注类别
-for obj in object_info:
-    class_name = obj['class_name']
-    contour = obj['contour']
-    contour = np.array(contour)
+    fig, ax = plt.subplots()
     
-    # 绘制轮廓
-    plt.plot(contour[:, 0], contour[:, 1], label=class_name)
+    for class_name, contours in object_info.items():
+        for contour in contours:
+            contour = np.array(contour)
+            ax.plot(contour[:, 0], contour[:, 1])
+            
+            # 计算轮廓的中心点
+            center_x = np.mean(contour[:, 0])
+            center_y = np.mean(contour[:, 1])
+            
+            # 将类别名称放置在中心点
+            ax.text(center_x, center_y, class_name, fontsize=12, ha='center', va='center',
+                    bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))
     
-    # 标注类别
-    centroid = np.mean(contour, axis=0)
-    plt.text(centroid[0], centroid[1], class_name, fontsize=12, ha='center')
+    ax.set_aspect('equal', adjustable='box')
+    plt.title('2D Contours')
+    plt.xlabel('X')
+    plt.ylabel('Y')
+    plt.show()
 
-# 设置绘图参数
-plt.xlabel('X-axis')
-plt.ylabel('Y-axis')
-plt.title('2D Contours with Class Labels')
-plt.legend()
-plt.grid(True)
-plt.axis('equal')  # 保持x和y轴比例一致
+    # 可视化3D点云
+    vis.run()
+    vis.destroy_window()
 
-# 显示绘图
-plt.show()
+# 调用函数，传入点云文件路径和JSON文件路径
+visualize_3d_pointcloud_with_contours('/home/sg/workspace/top-down-map/map06132/seg_pointcloud.ply', '/home/sg/workspace/top-down-map/map06132/object_info.json')

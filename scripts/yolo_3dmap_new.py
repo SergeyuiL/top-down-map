@@ -8,13 +8,13 @@ import cv2
 import open3d as o3d
 import time
 from sklearn.cluster import DBSCAN
-from scipy.spatial import ConvexHull
+from matplotlib import pyplot as plt
 
 from ultralytics import YOLO
 from ultralytics import settings
             
 class mapbuilder:
-    def __init__(self, data_dir, trans_camera_base, quat_camera_base, depth_denoise_kernel_size):
+    def __init__(self, data_dir, trans_camera_base, quat_camera_base):
         self.depth_dir = os.path.join(data_dir, "depth")
         self.rgb_dir = os.path.join(data_dir, "rgb")
         self.pose_path = os.path.join(data_dir, "node_pose.txt")
@@ -24,7 +24,6 @@ class mapbuilder:
         self.rgb_pointcloud_save_path = os.path.join(data_dir, "rgb_pointcloud.ply")
         self.seg_pointcloud_save_path = os.path.join(data_dir, "seg_pointcloud.ply")
         self.object_info_path = os.path.join(data_dir, "object_info.json")
-        self.merged_object_info_path = os.path.join(data_dir, "merged_object_info.json")
         
         r = R.from_quat(quat_camera_base)
         rot_matrix_camera2base = r.as_matrix()
@@ -32,7 +31,7 @@ class mapbuilder:
         self.T_base_camera[:3, :3] = rot_matrix_camera2base
         self.T_base_camera[:3, 3] = trans_camera_base
 
-        self.depth_denoise_kernel_size = depth_denoise_kernel_size
+        # self.depth_denoise_kernel_size = depth_denoise_kernel_size
         self.camera_intrinsics = np.zeros((1, 4))
         self.camera_matrix = np.eye(3)
         self.rgb_list = []
@@ -94,9 +93,9 @@ class mapbuilder:
                                 [0,  0,  1]
                             ])
         
-    def depth_denoise(self, depth_path):
+    def depth_denoise(self, depth_path, kernel_size=7):
         orin_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
-        kernel = np.ones((self.depth_denoise_kernel_size, self.depth_denoise_kernel_size), np.uint8)
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
         opened_image = cv2.morphologyEx(orin_image, cv2.MORPH_OPEN, kernel)
         denoised_image = cv2.morphologyEx(opened_image, cv2.MORPH_CLOSE, kernel)
         return denoised_image
@@ -138,15 +137,12 @@ class mapbuilder:
         t = pose[:3, 3]
         return (R_mat @ pointcloud.T).T + t
         
-    def build_ss_pointcloud(self, max_depth=6000, DBSCAN_eps=0.05, DBSCAN_min_samples=50, batch_size=100000):
-        final_object_info = []
-        combined_point_cloud = o3d.geometry.PointCloud()
+    def build_2dmap(self, max_depth=6000, DBSCAN_eps=0.05, DBSCAN_min_samples=50, voxel_size=0.1, kernel_size=7):
+        class_point_clouds = {}
+        all_class_ids = []
         
+        print("Start to merge 2D contours")
         pbar = tqdm(total=len(self.rgb_list))
-        all_class_names = []
-        all_transformed_points = []
-        all_colors = []
-
         for depth_path, seg_dir, pose in zip(self.depth_list, self.seg_list, self.pose_list):
             label_path = os.path.join(seg_dir, "label.txt")
             if not os.path.exists(label_path):
@@ -155,7 +151,7 @@ class mapbuilder:
                 continue
             try:
                 # depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
-                depth_image = self.depth_denoise(depth_path)
+                depth_image = self.depth_denoise(depth_path, kernel_size)
                 seg_image = cv2.imread(os.path.join(seg_dir, "rgb.jpg"))
             except Exception as e:
                 print(f"Failed to load source data: {e}")
@@ -166,7 +162,6 @@ class mapbuilder:
 
             point_cloud = self.depth_to_pointcloud(depth_image)
             transformed_point_cloud = self.transform_pointcloud(point_cloud, pose)
-
             depth_mask = (depth_image > 0) & (depth_image < max_depth)
 
             for label in labels:
@@ -175,79 +170,124 @@ class mapbuilder:
                 points = np.array(label_data[1:]).reshape(-1, 2)
 
                 class_name = self.class_names[class_id]
-
+                if class_name not in class_point_clouds:
+                    class_point_clouds[class_name] = o3d.geometry.PointCloud()
                 points[:, 0] *= seg_image.shape[1]
                 points[:, 1] *= seg_image.shape[0]
                 points = points.astype(int)
-
                 seg_mask = np.zeros(seg_image.shape[:2], dtype=np.uint8)
                 cv2.fillPoly(seg_mask, [points], 1)
                 seg_mask = seg_mask.flatten()
-
                 valid_indices = depth_mask.flatten() & (seg_mask > 0)
                 obj_points = transformed_point_cloud[valid_indices]
                 obj_colors = seg_image.reshape(-1, 3)[valid_indices] / 255.0
-
                 single_point_cloud = o3d.geometry.PointCloud()
                 single_point_cloud.points = o3d.utility.Vector3dVector(obj_points)
                 single_point_cloud.colors = o3d.utility.Vector3dVector(obj_colors)
-
-                combined_point_cloud += single_point_cloud
-                all_class_names.extend([class_name] * len(obj_points))
-                all_transformed_points.append(obj_points)
-                all_colors.append(obj_colors)
-
+                # Apply voxel downsampling
+                single_point_cloud = single_point_cloud.voxel_down_sample(voxel_size)
+                
+                class_point_clouds[class_name] += single_point_cloud
+                all_class_ids.extend([class_id] * len(obj_points))
             pbar.update(1)
         pbar.close()
-
-        all_transformed_points = np.vstack(all_transformed_points)
-        all_colors = np.vstack(all_colors)
-        num_points = all_transformed_points.shape[0]
-
-        print(f"Total points: {num_points}")
-
-        final_object_info = []
-        filtered_point_cloud = o3d.geometry.PointCloud()
-        start_time = time.time()
-
-        for start in range(0, num_points, batch_size):
-            end = min(start + batch_size, num_points)
-            batch_points = all_transformed_points[start:end]
-            batch_colors = all_colors[start:end]
-            batch_class_names = all_class_names[start:end]
-            
-            db = DBSCAN(eps=DBSCAN_eps, min_samples=DBSCAN_min_samples).fit(batch_points)
+        print("Start to cluster 2D points")
+        cluster_2d_start_time = time.time()
+        final_object_info = {}
+        for class_name, point_cloud in class_point_clouds.items():
+            points = np.asarray(point_cloud.points)
+            if len(points) == 0:
+                continue
+            # Project points to 2D plane
+            points_2d = points[:, [0, 1]]
+            # Perform DBSCAN clustering
+            db = DBSCAN(eps=DBSCAN_eps, min_samples=DBSCAN_min_samples).fit(points_2d)
             labels = db.labels_
-
             unique_labels = np.unique(labels)
+            contours = []
             for label in unique_labels:
                 if label == -1:
                     continue
                 mask = (labels == label)
-                cluster_points = batch_points[mask]
-                cluster_colors = batch_colors[mask]
-                class_name = max(set([batch_class_names[i] for i in range(len(batch_class_names)) if mask[i]]), key=[batch_class_names[i] for i in range(len(batch_class_names)) if mask[i]].count)
+                cluster_points = points_2d[mask]
+                hull = cv2.convexHull(cluster_points.astype(np.float32))
+                contours.append(hull[:, 0, :].tolist())
+            final_object_info[class_name] = contours
+        cluster_2d_end_time = time.time()
+        with open(self.object_info_path, 'w') as f:
+            json.dump(final_object_info, f, indent=4)
+        print(f"object contours info saved to {self.object_info_path}, time consumption: {cluster_2d_end_time - cluster_2d_start_time}")
+        
+    def merge_pointcloud(self, max_depth=6000, DBSCAN_eps=0.05, DBSCAN_min_samples=50, kernel_size=7, batch_size=100000):
+        combined_point_cloud = o3d.geometry.PointCloud()
 
-                cluster_2d_points = cluster_points[:, [0, 1]]  # 投影到 xy 平面
-                hull = cv2.convexHull(cluster_2d_points.astype(np.float32))
+        pbar = tqdm(total=len(self.rgb_list))
+        all_class_names = []
+        all_transformed_points = []
+        all_colors = []
 
-                obj_info = {
-                    "class_name": class_name,
-                    "contour": hull[:, 0, :].tolist()  # 提取轮廓点
-                }
-                final_object_info.append(obj_info)
+        for depth_path, rgb_path, seg_dir, pose in zip(self.depth_list, self.rgb_list, self.seg_list, self.pose_list):
+            label_path = os.path.join(seg_dir, "label.txt")
+            if not os.path.exists(label_path):
+                print(f"Label file not found for {label_path}, skipping.")
+                pbar.update(1)
+                continue
+            try:
+                # depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+                depth_image = self.depth_denoise(depth_path, kernel_size)
+                rgb_image = cv2.imread(rgb_path)
+                seg_image = cv2.imread(os.path.join(seg_dir, "rgb.jpg"))
+            except Exception as e:
+                print(f"Failed to load source data: {e}")
+                pbar.update(1)
+                continue  
 
-                single_point_cloud = o3d.geometry.PointCloud()
-                single_point_cloud.points = o3d.utility.Vector3dVector(cluster_points)
-                single_point_cloud.colors = o3d.utility.Vector3dVector(cluster_colors)
-                filtered_point_cloud += single_point_cloud
+            point_cloud = self.depth_to_pointcloud(depth_image)
+            transformed_point_cloud = self.transform_pointcloud(point_cloud, pose)
+            depth_mask = (depth_image > 0) & (depth_image < max_depth)
+            
+            
+            pbar.update(1)
+        pbar.close()
 
+        
         end_time = time.time()
         print(f"Time consumption for clustering and labeling: {end_time - start_time}")
 
-        o3d.io.write_point_cloud(self.seg_pointcloud_save_path, filtered_point_cloud)
-        with open(self.object_info_path, 'w') as f:
-            json.dump(final_object_info, f, indent=4)
+        o3d.io.write_point_cloud(self.seg_pointcloud_save_path, seg_point_cloud)
+        o3d.io.write_point_cloud(self.rgb_pointcloud_save_path, rgb_point_cloud)
+        
+    def show_contours(self):
+        with open(self.object_info_path, 'r') as f:
+            object_info = json.load(f)
+            fig, ax = plt.subplots()
+            for class_name, contours in object_info.items():
+                for contour in contours:
+                    contour = np.array(contour)
+                    ax.plot(contour[:, 0], contour[:, 1])
+                    
+                    center_x = np.mean(contour[:, 0])
+                    center_y = np.mean(contour[:, 1])
+                    
+                    ax.text(center_x, center_y, class_name, fontsize=12, ha='center', va='center',
+                            bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))
+        
+        ax.set_aspect('equal', adjustable='box')
+        plt.title('2D Contours')
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.show()
+        
+    def show_pointcloud(self, seg=True):
+        if seg:
+            point_cloud = o3d.io.read_point_cloud(self.seg_pointcloud_save_path)
+        else:
+            point_cloud = o3d.io.read_point_cloud(self.rgb_pointcloud_save_path)
+        vis = o3d.visualization.Visualizer()
+        vis.create_window()
+        vis.add_geometry(point_cloud)
+        vis.run()
+        vis.destroy_window()
             
 if __name__ == "__main__":
     data_dir = "/home/sg/workspace/top-down-map/map06132"
@@ -261,7 +301,5 @@ if __name__ == "__main__":
     # ssmap = mapbuilder(data_dir, trans_camera_footprint, quat_camera_footprint)
     ssmap.data_load()
     # ssmap.seg_rgb(confidence=0.6)
-    # ssmap.build_pointcloud(voxel_size=0.8, z_min=0.1, z_max=2)
-    # ssmap.visualize_ply(before_seg=True)
-    ssmap.build_ss_pointcloud(max_depth=5000, DBSCAN_eps=0.1, DBSCAN_min_samples=200, batch_size=100000)
-    # ssmap.merge_object_info(eps=0.005, min_samples=2)
+    ssmap.build_2dmap(max_depth=5000, DBSCAN_eps=0.1, DBSCAN_min_samples=200, voxel_size=0.05)
+    ssmap.show_contours()
