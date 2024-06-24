@@ -2,9 +2,11 @@ import os
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import json
+import yaml
 from tqdm import tqdm
 import shutil
 import cv2 
+from PIL import Image
 import open3d as o3d
 import time
 from sklearn.cluster import DBSCAN
@@ -14,7 +16,7 @@ from ultralytics import YOLO
 from ultralytics import settings
             
 class MapBuilder:
-    def __init__(self, data_dir, trans_camera_base, quat_camera_base):
+    def __init__(self, data_dir, trans_camera_base, quat_camera_base, map2base_link_origin, is_map_origin=True):
         self.depth_dir = os.path.join(data_dir, "depth")
         self.rgb_dir = os.path.join(data_dir, "rgb")
         self.pose_path = os.path.join(data_dir, "node_pose.txt")
@@ -24,12 +26,18 @@ class MapBuilder:
         self.rgb_pointcloud_save_path = os.path.join(data_dir, "rgb_pointcloud.ply")
         self.seg_pointcloud_save_path = os.path.join(data_dir, "seg_pointcloud.ply")
         self.object_info_path = os.path.join(data_dir, "object_info.json")
+        self.map_pgm = os.path.join(data_dir, "map.pgm")
+        self.map_yaml = os.path.join(data_dir, "map.yaml")
         
         r = R.from_quat(quat_camera_base)
         rot_matrix_camera2base = r.as_matrix()
         self.T_base_camera = np.eye(4)
         self.T_base_camera[:3, :3] = rot_matrix_camera2base
         self.T_base_camera[:3, 3] = trans_camera_base
+        
+        self.is_map_origin = is_map_origin
+        if not is_map_origin:
+            self.map2base_link_origin = map2base_link_origin
 
         # self.depth_denoise_kernel_size = depth_denoise_kernel_size
         self.camera_intrinsics = np.zeros((1, 4))
@@ -71,7 +79,11 @@ class MapBuilder:
                                     [0,                0,                 0, 1]
                                 ])
             T_map_camera = np.dot(T_map_base, self.T_base_camera)
-            self.pose_list.append(T_map_camera)
+            if self.is_map_origin:
+                self.pose_list.append(T_map_camera)
+            else:
+                T_map_camera_origin = np.dot(self.map2base_link_origin, T_map_camera)
+                self.pose_list.append(T_map_camera_origin)
         # get rgb path
         self.rgb_list = [os.path.join(self.rgb_dir, f"rgb_{index}.png") for index in indices]
         # get depth path
@@ -92,6 +104,13 @@ class MapBuilder:
                                 [0,  fy, cy],
                                 [0,  0,  1]
                             ])
+        
+    def load_map(self):
+        image = Image.open(self.map_pgm)
+        image = np.array(image)
+        with open(self.map_yaml, 'r') as f:
+            metadata = yaml.safe_load(f)
+        return image, metadata
         
     def depth_denoise(self, depth_path, kernel_size=7):
         orin_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
@@ -142,6 +161,7 @@ class MapBuilder:
         all_class_ids = []
         
         print("Start to merge 2D contours")
+        cluster_2d_start_time = time.time()
         pbar = tqdm(total=len(self.rgb_list))
         for depth_path, seg_dir, pose in zip(self.depth_list, self.seg_list, self.pose_list):
             label_path = os.path.join(seg_dir, "label.txt")
@@ -192,7 +212,7 @@ class MapBuilder:
             pbar.update(1)
         pbar.close()
         print("Start to cluster 2D points")
-        cluster_2d_start_time = time.time()
+        
         final_object_info = {}
         for class_name, point_cloud in class_point_clouds.items():
             points = np.asarray(point_cloud.points)
@@ -278,24 +298,52 @@ class MapBuilder:
         o3d.io.write_point_cloud(self.rgb_pointcloud_save_path, rgb_point_cloud)
         
     def show_contours(self):
+        image = Image.open(self.map_pgm)
+        image = np.array(image)
+        
+        with open(self.map_yaml, 'r') as f:
+            metadata = yaml.safe_load(f)
+        
+        resolution = metadata['resolution']
+        origin = metadata['origin']
+
+        height, width = image.shape
+
         with open(self.object_info_path, 'r') as f:
             object_info = json.load(f)
-            fig, ax = plt.subplots()
-            for class_name, contours in object_info.items():
-                for contour in contours:
-                    contour = np.array(contour)
-                    ax.plot(contour[:, 0], contour[:, 1])
-                    
-                    center_x = np.mean(contour[:, 0])
-                    center_y = np.mean(contour[:, 1])
-                    
-                    ax.text(center_x, center_y, class_name, fontsize=12, ha='center', va='center',
-                            bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))
-        
+
+        fig, ax = plt.subplots()
+        # extent = [
+        #     origin[0],  # left
+        #     origin[0] / resolution + width,  # right
+        #     origin[1],  # down
+        #     origin[1] / resolution + height  # up
+        # ]
+        ax.imshow(image, cmap='gray', origin='lower')
+
+        for class_name, contours in object_info.items():
+            for contour in contours:
+                contour = np.array(contour)
+                transformed_contour = np.column_stack((
+                    (contour[:, 0] - origin[0]) / resolution ,
+                    (origin[1] + height * resolution - contour[:, 1]) / resolution
+                ))
+                ax.plot(transformed_contour[:, 0], transformed_contour[:, 1])
+
+                center_x = np.mean(transformed_contour[:, 0])
+                center_y = np.mean(transformed_contour[:, 1])
+                ax.text(center_x, center_y, class_name, fontsize=12, ha='center', va='center',
+                        bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))
+
+        # origin_x, origin_y = origin[0], origin[1]
+        # ax.scatter(origin_x, origin_y, s=100, color='red')
+        # ax.text(origin_x, origin_y, 'origin', fontsize=12, ha='center', va='center',
+        #         bbox=dict(facecolor='white', alpha=0.5, edgecolor='none', boxstyle='round,pad=0.5'))
+
         ax.set_aspect('equal', adjustable='box')
-        plt.title('2D Contours')
-        plt.xlabel('X')
-        plt.ylabel('Y')
+        plt.title('2D Contours on Map')
+        plt.xlabel('X (pixels)')
+        plt.ylabel('Y (pixels)')
         plt.show()
         
     def show_pointcloud(self, seg=True):
@@ -311,17 +359,22 @@ class MapBuilder:
         
             
 if __name__ == "__main__":
-    data_dir = "/home/sg/workspace/top-down-map/map06132"
+    data_dir = "/home/sg/workspace/top-down-map/map"
     
     trans_camera_base = [0.08278859935292791, -0.03032243564439939, 1.0932014910932797]
     quat_camera_base = [-0.48836894018639176, 0.48413701319615116, -0.5135400532533373, 0.5132092598729002]
+    map2base_link_origin = np.array([[-0.347, 0.938, 0.000, 2.229],
+                                    [-0.938, -0.347, -0.000, 9.121],
+                                    [-0.000, 0.000, 1.000, 0.255],
+                                    [0.000, 0.000, 0.000, 1.000]])
+
     # trans_camera_footprint = [0.08278859935292791, -0.03032243564439939, 1.3482014910932798]
     # quat_camera_footprint = [-0.48836894018639176, 0.48413701319615116, -0.5135400532533373, 0.5132092598729002]
     
-    ssmap = MapBuilder(data_dir, trans_camera_base, quat_camera_base)
+    ssmap = MapBuilder(data_dir, trans_camera_base, quat_camera_base, map2base_link_origin, is_map_origin=True)
     # ssmap = mapbuilder(data_dir, trans_camera_footprint, quat_camera_footprint)
     ssmap.data_load()
     # ssmap.seg_rgb(confidence=0.6)
-    # ssmap.build_2dmap(max_depth=5000, DBSCAN_eps=0.1, DBSCAN_min_samples=200, voxel_size=0.05)
+    # ssmap.build_2dmap(max_depth=6000, DBSCAN_eps=0.1, DBSCAN_min_samples=190, voxel_size=0.05)
     ssmap.show_contours()
     # ssmap.merge_pointcloud()
