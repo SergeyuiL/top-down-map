@@ -6,9 +6,12 @@ from nav2_msgs.action import NavigateToPose
 from tf2_ros import Buffer, TransformListener
 import numpy as np
 import tf_transformations
+from tf2_ros import LookupException
 
 import os
 import json
+import time
+from base import Base
 
 class TargetPublisher(Node):
 
@@ -18,20 +21,30 @@ class TargetPublisher(Node):
         self.base_frame = base_frame
         self.world_frame = world_frame
         
-        self.tf_buffer = Buffer()
+        self.tf_buffer = Buffer(cache_time=rclpy.duration.Duration(seconds=10.0))
         self.tf_listener = TransformListener(self.tf_buffer, self)
         
         self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.goal_pose = PoseStamped()
 
     def get_transform(self):
+        now = self.get_clock().now()
+        past = now - rclpy.duration.Duration(seconds=0.1)  # 小于实际的最小延迟
+        future = now + rclpy.duration.Duration(seconds=0.1)  # 未来的短暂时间窗
         try:
-            now = rclpy.time.Time()
-            transform = self.tf_buffer.lookup_transform(self.world_frame, self.base_frame, now)
+            # 尝试获取最接近当前时间的转换，允许一定的时间差
+            transform = self.tf_buffer.lookup_transform(
+                self.world_frame, self.base_frame, now.to_msg(),
+                timeout=rclpy.duration.Duration(seconds=0.1))
             return transform
-        except Exception as e:
-            self.get_logger().error(f"Transform error: {e}")
+        except LookupException as e:
+            self.get_logger().error(f"Failed to find transform: {e}")
             return None
+        
+    def print_all_transforms(self):
+        all_transforms = self.tf_buffer.all_frames_as_string()
+        self.get_logger().info("Current available transforms:\n" + all_transforms)
+
 
     @property
     def position(self) -> np.ndarray:
@@ -126,14 +139,16 @@ def main():
     rclpy.init()
     
     tp = TargetPublisher(base_frame, world_frame)
+    base = Base()
     with open(os.path.join(data_dir, "object_info.json"), 'r') as f:
             object_info = json.load(f)
     # contour = np.array(object_info["bed"][0])
     contour = np.array(object_info["couch"][0])
     center = np.mean(contour, axis=0)
     
-    # cur_position = tp.position[0:2]
-    cur_position = np.array([0., 0.])
+    cur_position = tp.position[0:2]
+    print(f"Current Pose: {tp.position, tp.rotation}")
+    # cur_position = np.array([0., 0.])
     robot_radius = 0.3
     safe_distance = 0.2
     
@@ -156,7 +171,12 @@ def main():
 
     navigation_position = np.array([navigation_point[0], navigation_point[1], 0.0])  
     navigation_orientation = np.array(quaternion)
-    # print(navigation_position, navigation_orientation)
+    print(f"Target Pose: {navigation_position}, {navigation_orientation}")
+    
+    test_pos = np.array([0.5, 0, 0])
+    test_rot = np.array([0, 0, 0, 1.])
+    
+    base.move_to(test_pos, test_rot, "robot")
     
     tp.move_to(navigation_position, navigation_orientation, "world")
 
@@ -165,4 +185,10 @@ def main():
     rclpy.shutdown()
 
 if __name__ == '__main__':
-    main()
+    # main()
+    tf_buffer = Buffer(cache_time=rclpy.duration.Duration(seconds=10.0))
+    tf_listener = TransformListener(tf_buffer)
+    transform = tf_buffer.lookup_transform(
+                "map", "base_link", now.to_msg(),
+                timeout=rclpy.duration.Duration(seconds=0.1))
+    
