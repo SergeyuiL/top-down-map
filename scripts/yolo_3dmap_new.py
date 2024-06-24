@@ -13,7 +13,7 @@ from matplotlib import pyplot as plt
 from ultralytics import YOLO
 from ultralytics import settings
             
-class mapbuilder:
+class MapBuilder:
     def __init__(self, data_dir, trans_camera_base, quat_camera_base):
         self.depth_dir = os.path.join(data_dir, "depth")
         self.rgb_dir = os.path.join(data_dir, "rgb")
@@ -218,42 +218,62 @@ class mapbuilder:
             json.dump(final_object_info, f, indent=4)
         print(f"object contours info saved to {self.object_info_path}, time consumption: {cluster_2d_end_time - cluster_2d_start_time}")
         
-    def merge_pointcloud(self, max_depth=6000, DBSCAN_eps=0.05, DBSCAN_min_samples=50, kernel_size=7, batch_size=100000):
-        combined_point_cloud = o3d.geometry.PointCloud()
+    def merge_pointcloud(self, max_depth=6000, kernel_size=7):
+        seg_point_cloud = o3d.geometry.PointCloud()
+        rgb_point_cloud = o3d.geometry.PointCloud()
 
         pbar = tqdm(total=len(self.rgb_list))
-        all_class_names = []
-        all_transformed_points = []
-        all_colors = []
-
+        print("Start to merge pointcloud")
+        start_time = time.time()
         for depth_path, rgb_path, seg_dir, pose in zip(self.depth_list, self.rgb_list, self.seg_list, self.pose_list):
             label_path = os.path.join(seg_dir, "label.txt")
             if not os.path.exists(label_path):
                 print(f"Label file not found for {label_path}, skipping.")
                 pbar.update(1)
                 continue
+
             try:
-                # depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
                 depth_image = self.depth_denoise(depth_path, kernel_size)
                 rgb_image = cv2.imread(rgb_path)
                 seg_image = cv2.imread(os.path.join(seg_dir, "rgb.jpg"))
             except Exception as e:
                 print(f"Failed to load source data: {e}")
                 pbar.update(1)
-                continue  
+                continue
+
+            with open(label_path, 'r') as f:
+                labels = f.readlines()
 
             point_cloud = self.depth_to_pointcloud(depth_image)
             transformed_point_cloud = self.transform_pointcloud(point_cloud, pose)
             depth_mask = (depth_image > 0) & (depth_image < max_depth)
-            
-            
+
+            for label in labels:
+                label_data = list(map(float, label.split()))
+                points = np.array(label_data[1:]).reshape(-1, 2)
+
+                mask = np.zeros(depth_image.shape, dtype=np.uint8)
+                cv2.fillPoly(mask, [points.astype(np.int32)], 1)
+
+                seg_mask = depth_mask & (mask > 0)
+                seg_indices = np.where(seg_mask)    
+                
+                seg_points = transformed_point_cloud.points[seg_indices]
+                seg_colors = rgb_image[seg_indices]
+
+                rgb_points = transformed_point_cloud.points[depth_mask]
+                rgb_colors = rgb_image[depth_mask]
+
+                seg_point_cloud.points.extend(seg_points)
+                seg_point_cloud.colors.extend(seg_colors)
+                rgb_point_cloud.points.extend(rgb_points)
+                rgb_point_cloud.colors.extend(rgb_colors)
+
             pbar.update(1)
         pbar.close()
 
-        
         end_time = time.time()
-        print(f"Time consumption for clustering and labeling: {end_time - start_time}")
-
+        print(f"Time consumption for merging: {end_time - start_time}")
         o3d.io.write_point_cloud(self.seg_pointcloud_save_path, seg_point_cloud)
         o3d.io.write_point_cloud(self.rgb_pointcloud_save_path, rgb_point_cloud)
         
@@ -288,6 +308,7 @@ class mapbuilder:
         vis.add_geometry(point_cloud)
         vis.run()
         vis.destroy_window()
+        
             
 if __name__ == "__main__":
     data_dir = "/home/sg/workspace/top-down-map/map06132"
@@ -297,9 +318,10 @@ if __name__ == "__main__":
     # trans_camera_footprint = [0.08278859935292791, -0.03032243564439939, 1.3482014910932798]
     # quat_camera_footprint = [-0.48836894018639176, 0.48413701319615116, -0.5135400532533373, 0.5132092598729002]
     
-    ssmap = mapbuilder(data_dir, trans_camera_base, quat_camera_base)
+    ssmap = MapBuilder(data_dir, trans_camera_base, quat_camera_base)
     # ssmap = mapbuilder(data_dir, trans_camera_footprint, quat_camera_footprint)
     ssmap.data_load()
     # ssmap.seg_rgb(confidence=0.6)
-    ssmap.build_2dmap(max_depth=5000, DBSCAN_eps=0.1, DBSCAN_min_samples=200, voxel_size=0.05)
+    # ssmap.build_2dmap(max_depth=5000, DBSCAN_eps=0.1, DBSCAN_min_samples=200, voxel_size=0.05)
     ssmap.show_contours()
+    # ssmap.merge_pointcloud()
